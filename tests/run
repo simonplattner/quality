@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# Tests for `lint`. Runs inside the quality image: builds throwaway git repos and
+# asserts which checks ran and which failed. Bad content (a token, a typo) is
+# assembled at runtime so this file passes quality's own gitleaks and typos.
+set -uo pipefail
+
+UNIVERSAL="editorconfig gitleaks typos"
+
+# Writes a minimal valid file of each detected type into the current directory.
+write_clean_repo() {
+  printf 'root = true\n\n[*]\ncharset = utf-8\nend_of_line = lf\nindent_style = space\ninsert_final_newline = true\ntrim_trailing_whitespace = true\n' >.editorconfig
+  printf 'key: value\n' >config.yaml
+  mkdir -p .github/workflows
+  printf 'name: ci\non: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n' >.github/workflows/ci.yaml
+  printf 'FROM debian:bookworm-slim\nRUN echo hi\n' >Dockerfile
+  printf 'print("hi")\n' >app.py
+  printf '#!/usr/bin/env bash\necho "hi"\n' >script
+  printf 'services:\n  a:\n    image: busybox:1\n' >compose.yaml
+}
+
+indent() {
+  sed 's/^/     | /'
+}
+
+# expect <name> <expected ran checks> <expected failed checks>; runs `lint` in the current directory.
+expect() {
+  local name=$1 want_ran=$2 want_failed=$3 out ran failed
+  git add --all
+  out=$(lint 2>&1)
+  ran=$(grep '^==> ' <<<"$out" | cut -c5- | sort | xargs)
+  failed=$(grep '^FAILED: ' <<<"$out" | cut -c9- | tr ' ' '\n' | sort | xargs)
+  want_ran=$(tr ' ' '\n' <<<"$want_ran" | sort | xargs)
+  want_failed=$(tr ' ' '\n' <<<"$want_failed" | sort | xargs)
+  if [[ $ran == "$want_ran" && $failed == "$want_failed" ]]; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name"
+    echo "     ran:    '$ran' (want '$want_ran')"
+    echo "     failed: '$failed' (want '$want_failed')"
+    indent <<<"$out"
+    return 1
+  fi
+}
+
+# Runs the rest of the line in a fresh git repo in a subshell.
+in_repo() {
+  (
+    cd "$(mktemp -d)" || exit 1
+    git init --quiet
+    "$@"
+  )
+}
+
+ALL="$UNIVERSAL actionlint compose hadolint ruff-check ruff-format shellcheck shfmt yamllint"
+
+case_empty_repo_runs_only_universal_checks() {
+  printf '# readme\n' >README.md
+  expect "${FUNCNAME[0]}" "$UNIVERSAL" ""
+}
+
+case_clean_repo_runs_every_check() {
+  write_clean_repo
+  expect "${FUNCNAME[0]}" "$ALL" ""
+}
+
+case_yaml_error_fails_yamllint() {
+  write_clean_repo
+  printf 'key: value\nkey: other\n' >config.yaml
+  expect "${FUNCNAME[0]}" "$ALL" "yamllint"
+}
+
+case_workflow_error_fails_actionlint() {
+  write_clean_repo
+  printf 'name: ci\non: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    stepz:\n      - run: echo hi\n' >.github/workflows/ci.yaml
+  expect "${FUNCNAME[0]}" "$ALL" "actionlint"
+}
+
+case_trailing_whitespace_fails_editorconfig() {
+  write_clean_repo
+  printf '# readme \n' >README.md
+  expect "${FUNCNAME[0]}" "$ALL" "editorconfig"
+}
+
+case_typo_fails_typos() {
+  write_clean_repo
+  printf 'We %s it.\n' "reci""eve" >README.md
+  expect "${FUNCNAME[0]}" "$ALL" "typos"
+}
+
+case_token_fails_gitleaks() {
+  write_clean_repo
+  printf 'token = "%s"\n' "gh""p_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5" >secrets.txt
+  expect "${FUNCNAME[0]}" "$ALL" "gitleaks"
+}
+
+case_unquoted_variable_fails_shellcheck() {
+  write_clean_repo
+  # shellcheck disable=SC2016 # the unexpanded $1 is the defect under test
+  printf '#!/bin/sh\necho $1\n' >run.sh
+  expect "${FUNCNAME[0]}" "$ALL" "shellcheck"
+}
+
+case_unformatted_shell_fails_shfmt() {
+  write_clean_repo
+  printf '#!/usr/bin/env bash\necho   "hi"\n' >script
+  expect "${FUNCNAME[0]}" "$ALL" "shfmt"
+}
+
+case_shfmt_follows_editorconfig_indent() {
+  write_clean_repo
+  printf '\n[script]\nindent_size = 2\n' >>.editorconfig
+  printf '#!/usr/bin/env bash\nif true; then\n  echo "hi"\nfi\n' >script
+  expect "${FUNCNAME[0]}" "$ALL" ""
+}
+
+case_untagged_base_image_fails_hadolint() {
+  write_clean_repo
+  printf 'FROM debian\nRUN echo hi\n' >Dockerfile
+  expect "${FUNCNAME[0]}" "$ALL" "hadolint"
+}
+
+case_unused_import_fails_ruff_check() {
+  write_clean_repo
+  printf 'import os\n\nprint("hi")\n' >app.py
+  expect "${FUNCNAME[0]}" "$ALL" "ruff-check"
+}
+
+case_unformatted_python_fails_ruff_format() {
+  write_clean_repo
+  printf "print( 'hi' )\n" >app.py
+  expect "${FUNCNAME[0]}" "$ALL" "ruff-format"
+}
+
+case_invalid_compose_fails_compose() {
+  write_clean_repo
+  printf 'services:\n  a:\n    image: busybox:1\n    not_a_key: 1\n' >compose.yaml
+  expect "${FUNCNAME[0]}" "$ALL" "compose"
+}
+
+case_repo_config_overrides_central_config() {
+  write_clean_repo
+  printf 'import os\n\nprint("hi")\n' >app.py
+  printf 'extend = "/etc/quality/ruff.toml"\n\n[lint]\nignore = ["F401"]\n' >ruff.toml
+  printf 'key: value\nkey: other\n' >config.yaml
+  printf 'extends: /etc/quality/yamllint.yaml\nrules:\n  key-duplicates: disable\n' >.yamllint.yaml
+  expect "${FUNCNAME[0]}" "$ALL" ""
+}
+
+case_untracked_files_are_ignored() {
+  write_clean_repo
+  git add --all
+  printf 'key: value\nkey: other\n' >untracked.yaml
+  if out=$(lint 2>&1); then
+    echo "ok   ${FUNCNAME[0]}"
+  else
+    echo "FAIL ${FUNCNAME[0]}"
+    indent <<<"$out"
+    return 1
+  fi
+}
+
+failures=0
+for test in $(declare -F | awk '{print $3}' | grep '^case_'); do
+  in_repo "$test" || failures=$((failures + 1))
+done
+
+if ((failures)); then
+  echo "$failures test(s) failed"
+  exit 1
+fi
+echo "all tests passed"

@@ -1,0 +1,5 @@
+line-length = 120
+
+[lint]
+# Defaults plus import sorting and likely-bug patterns.
+extend-select = ["I", "B"]

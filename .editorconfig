@@ -1,0 +1,16 @@
+root = true
+
+[*]
+indent_style = space
+indent_size = 4
+end_of_line = lf
+charset = utf-8
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+[*.{yaml,yml,json}]
+indent_size = 2
+
+# Shell scripts, by extension or by name for the extensionless ones.
+[{*.sh,lint,tests/run}]
+indent_size = 2

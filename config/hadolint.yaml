@@ -1,0 +1,5 @@
+# Info-level rules (e.g. DL3059, consecutive RUNs) are style nits, not defects.
+failure-threshold: warning
+ignored:
+  # Pinning apt package versions breaks the build as soon as Debian drops the old version from its mirrors.
+  - DL3008

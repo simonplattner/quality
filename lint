@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Runs every check that applies to the repo in the current directory and reports all failures, not just the first.
+# Universal checks always run; the others switch on when git tracks matching files. A repo's own config file for a
+# tool replaces the central default in /etc/quality.
+set -uo pipefail
+
+CONFIG=/etc/quality
+failed=()
+
+check() {
+  local name=$1
+  shift
+  echo "==> $name"
+  "$@" || failed+=("$name")
+}
+
+tracked() {
+  git ls-files -z -- "$@"
+}
+
+has_any() {
+  local f
+  for f; do [[ -f $f ]] && return 0; done
+  return 1
+}
+
+# Tracked *.sh files plus tracked files whose shebang names a POSIX-family shell.
+shell_scripts() {
+  local f first
+  while IFS= read -r -d '' f; do
+    if [[ $f == *.sh ]]; then
+      printf '%s\0' "$f"
+    elif [[ -f $f ]] && IFS= read -r first <"$f" 2>/dev/null && [[ $first =~ ^\#!.*(/|env\ )(sh|bash|dash|ksh)([[:space:]]|$) ]]; then
+      printf '%s\0' "$f"
+    fi
+  done < <(tracked)
+}
+
+compose_all() {
+  local f rc=0
+  for f; do
+    echo "$f"
+    docker-compose -f "$f" config -q || rc=1
+  done
+  return $rc
+}
+
+mapfile -d '' yaml < <(tracked '*.yaml' '*.yml')
+mapfile -d '' workflows < <(tracked '.github/workflows/*.yaml' '.github/workflows/*.yml')
+mapfile -d '' shell < <(shell_scripts)
+mapfile -d '' dockerfiles < <(tracked '*Dockerfile' '*Dockerfile.*' '*.Dockerfile')
+mapfile -d '' python < <(tracked '*.py')
+mapfile -d '' compose < <(tracked '*compose.yaml' '*compose.yml')
+
+yamllint_config=() editorconfig_config=() hadolint_config=() ruff_config=()
+has_any .yamllint .yamllint.yaml .yamllint.yml || yamllint_config=(-c "$CONFIG/yamllint.yaml")
+has_any .editorconfig-checker.json .ecrc || editorconfig_config=(-config "$CONFIG/editorconfig-checker.json")
+has_any .hadolint.yaml .hadolint.yml || hadolint_config=(--config "$CONFIG/hadolint.yaml")
+has_any ruff.toml .ruff.toml || grep -qs '^\[tool\.ruff' pyproject.toml || ruff_config=(--config "$CONFIG/ruff.toml")
+
+check editorconfig editorconfig-checker -no-color "${editorconfig_config[@]}"
+check typos typos
+check gitleaks gitleaks dir --no-banner --no-color --redact .
+((${#yaml[@]})) && check yamllint yamllint --strict "${yamllint_config[@]}" "${yaml[@]}"
+((${#workflows[@]})) && check actionlint actionlint "${workflows[@]}"
+((${#shell[@]})) && check shellcheck shellcheck "${shell[@]}"
+# Indentation and style come from the repo's .editorconfig.
+((${#shell[@]})) && check shfmt shfmt --diff "${shell[@]}"
+((${#dockerfiles[@]})) && check hadolint hadolint "${hadolint_config[@]}" "${dockerfiles[@]}"
+((${#python[@]})) && check ruff-check ruff check "${ruff_config[@]}" "${python[@]}"
+((${#python[@]})) && check ruff-format ruff format --check "${ruff_config[@]}" "${python[@]}"
+((${#compose[@]})) && check compose compose_all "${compose[@]}"
+
+if ((${#failed[@]})); then
+  echo "FAILED: ${failed[*]}"
+  exit 1
+fi
+echo "all checks passed"

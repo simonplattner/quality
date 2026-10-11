@@ -1,0 +1,38 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Europe/Zurich",
+  "schedule": ["* 0-6 * * 1"],
+  "minimumReleaseAge": "14 days",
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Release binaries in the image; the datasource finds the new sha256 itself",
+      "managerFilePatterns": ["/^Dockerfile$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\nARG \\w+_VERSION=(?<currentValue>\\S+)\\nARG \\w+_SHA256=(?<currentDigest>[0-9a-f]{64})"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Tools, not the base image: ci builds the image and runs the tests against every tool, so a green run tests them",
+      "groupName": "lint tooling",
+      "matchManagers": ["custom.regex", "pip_requirements"]
+    },
+    {
+      "matchManagers": ["custom.regex", "pip_requirements"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    },
+    {
+      "groupName": "github actions",
+      "matchManagers": ["github-actions"]
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "automerge": true
+    }
+  ]
+}
