@@ -73,6 +73,24 @@ typos, gitleaks, shellcheck and actionlint have no central config; their native
 repo files (`_typos.toml`, `.gitleaks.toml`, `.gitleaksignore`, `.shellcheckrc`,
 `.github/actionlint.yaml`) apply as usual.
 
+## Renovate preset
+
+`default.json` holds the Renovate defaults all repos share: weekly schedule,
+14-day minimum release age, grouped GitHub Actions updates with minor/patch
+automerge, and the regex manager for release binaries pinned in a Dockerfile as
+`# renovate:` comment plus `ARG X_VERSION` / `ARG X_SHA256`. A repo's
+`renovate.json` extends it and adds only its own rules:
+
+```json
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["github>simonplattner/quality"]
+}
+```
+
+Renovate reads the preset from `main`, not from a release: a preset change only
+changes how future update PRs are opened, so nothing breaks at once.
+
 ## Release
 
 Projects pin a release, so a new rule shows up as a red Renovate PR per repo
