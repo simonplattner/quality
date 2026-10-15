@@ -5,6 +5,11 @@ name: lint
 # The image tag below must equal the release tag this file is published under; release.yaml enforces that.
 on:
   workflow_call:
+    inputs:
+      timeout-minutes:
+        description: Job timeout; a calling job cannot set its own.
+        type: number
+        default: 5
 
 permissions:
   contents: read
@@ -12,7 +17,7 @@ permissions:
 jobs:
   lint:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: ${{ inputs.timeout-minutes }}
     steps:
       - uses: actions/checkout@v7
       - run: docker run --rm -v "$PWD:/work" ghcr.io/simonplattner/quality:v1

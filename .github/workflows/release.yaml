@@ -12,7 +12,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 5
     env:
       IMAGE: ghcr.io/simonplattner/quality:${{ github.ref_name }}
     steps:

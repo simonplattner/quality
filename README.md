@@ -33,6 +33,9 @@ jobs:
     uses: simonplattner/quality/.github/workflows/lint.yaml@v1
 ```
 
+The job times out after 5 minutes. A large repo raises that with
+`with: { timeout-minutes: 15 }`, since a calling job cannot set its own timeout.
+
 Locally, from the project root:
 
 ```bash
